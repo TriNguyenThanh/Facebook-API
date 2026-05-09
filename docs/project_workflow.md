@@ -1,3 +1,6 @@
+# Thông tin sinh viên:
+**SV: Nguyễn Thành Trí - 6451071079**   
+
 # Báo Cáo Luồng Xử Lý Hệ Thống Tự Động Trả Lời Facebook Comment (Facebook AI Webhook)
 
 Hệ thống được thiết kế theo kiến trúc Microservices kết hợp Message Queue (Kafka) nhằm đảm bảo khả năng chịu tải cao, không làm rớt (miss) webhook của Facebook, kết hợp giữa thuật toán Rule-based (Luật lập trình sẵn) và Trí tuệ nhân tạo (Dify AI) để tăng độ linh hoạt và tiết kiệm chi phí.
@@ -11,6 +14,9 @@ Dưới đây là luồng xử lý chi tiết từng bước khi có một khác
 
 ## Giai đoạn 2: Trích xuất và Tiền xử lý (Core Service Worker)
 3. **Tiêu thụ (Consume):** Container `core-service-worker` liên tục lắng nghe topic `raw_events` từ Kafka và lấy gói dữ liệu ra để xử lý.
+
+<img src="./images/consumer.png" alt="consumer">
+
 4. **Phân tích dữ liệu (Parser):** Hệ thống bóc tách các thông tin quan trọng như `sender_id` (người gửi), `comment_id`, `post_id`, `parent_id` và nội dung `message`.
 5. **Lọc bình luận rác/không hợp lệ:**
    - **Chống Loop (Lặp vô hạn):** Nếu `sender_id` trùng với ID của Fanpage (tức là bình luận do chính Page trả lời), hệ thống bỏ qua.
@@ -27,6 +33,7 @@ def _process_comment_event(self, evt, payload, fb_client, failed_producer, ai_cl
     if evt.parent_id and evt.post_id and str(evt.parent_id) != str(evt.post_id):
         return
 ```
+<img src="./images/comment.png" alt="comment" style="align: center"   >
 
 6. **Lưu trữ Database:** Thông tin người dùng (`SocialProfile`) và bình luận (`IncomingEvent`) được lưu vào cơ sở dữ liệu PostgreSQL. Hệ thống sử dụng thuật toán mã hóa SHA-256 tạo ra `content_hash` để tiện cho việc nhận diện nội dung trùng lặp.
 
@@ -82,6 +89,7 @@ else:
     if reply:
         fb_client.reply_to_comment(evt.comment_id, reply)
 ```
+<img src="./images/reply.png" alt="reply">
 
 11. **Cập nhật Trạng thái:** Cập nhật trạng thái sự kiện trong Database thành `PROCESSED` (đã xử lý), `REPLIED` (đã trả lời) hoặc `REVIEW_PENDING` (chờ duyệt).
 
