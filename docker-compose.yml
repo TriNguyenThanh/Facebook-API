@@ -4,13 +4,16 @@ services:
   web-hook:
     build:
       context: .
-      dockerfile: ./ucode-webhook/.dockerfile
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/ucode_webhook
     ports:
       - "5001:5001"
     env_file:
+      - ./ucode_webhook/.env
       - .env
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_RAW_EVENTS_TOPIC: raw_events
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,0.0.0.0
     depends_on:
       - kafka
@@ -21,6 +24,44 @@ services:
         "python manage.py migrate && gunicorn core.wsgi:application --bind 0.0.0.0:5001 --workers 3 --threads 2 --timeout 60",
       ]
     container_name: web-hook
+
+  core-service-worker:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/core_service
+    env_file:
+      - ./core_service/.env
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      - kafka
+    command:
+      [
+        "sh",
+        "-c",
+        "python manage.py migrate && python manage.py consume_raw_events",
+      ]
+    container_name: core-service-worker
+
+  core-service-retry:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/core_service
+    env_file:
+      - ./core_service/.env
+      - .env
+    environment:
+      DJANGO_DEBUG: "1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SEND_FAILED_TOPIC: send_failed
+      FACEBOOK_ACTIONS_ENABLED: "0"
+    depends_on:
+      - kafka
+    command: ["sh", "-c", "python manage.py retry_failed_actions --sleep 2"]
+    container_name: core-service-retry
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1

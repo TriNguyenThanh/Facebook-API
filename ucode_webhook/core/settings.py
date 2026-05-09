@@ -10,6 +10,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from .env at project root (same level as manage.py)
 load_dotenv(BASE_DIR / ".env")
+# Also load from workspace root
+load_dotenv(BASE_DIR.parent / ".env")
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-unsafe-secret-key")
@@ -119,6 +121,10 @@ REST_FRAMEWORK = {
 # Optional: Kafka-related env values (use in your producer code)
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_WEBHOOK_TOPIC = os.getenv("KAFKA_WEBHOOK_TOPIC", "webhooks")
+KAFKA_RAW_EVENTS_TOPIC = os.getenv("KAFKA_RAW_EVENTS_TOPIC", "raw_events")
+
+# Publish raw_events by default; optionally also publish to legacy KAFKA_WEBHOOK_TOPIC.
+KAFKA_PUBLISH_WEBHOOKS_TOPIC = os.getenv("KAFKA_PUBLISH_WEBHOOKS_TOPIC", "0") == "1"
 
 # Facebook webhook verification token (used by your verify view)
 FACEBOOK_VERIFY_TOKEN = os.getenv("FACEBOOK_VERIFY_TOKEN", "")

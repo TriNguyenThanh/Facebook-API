@@ -5,6 +5,7 @@ confluent-kafka==2.14.0
 Django==6.0.4
 djangorestframework==3.17.1
 drf-yasg==1.21.15
+google-generativeai>=0.8.0
 gunicorn==25.3.0
 idna==3.13
 inflection==0.5.1

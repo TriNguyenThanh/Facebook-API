@@ -57,6 +57,8 @@ class FacebookWebhookService:
         self.verify_token = getattr(settings, 'FACEBOOK_VERIFY_TOKEN', '')
         self.app_secret = getattr(settings, 'FACEBOOK_APP_SECRET', '')
         self.kafka_topic = getattr(settings, 'KAFKA_WEBHOOK_TOPIC', 'webhooks')
+        self.raw_events_topic = getattr(settings, 'KAFKA_RAW_EVENTS_TOPIC', 'raw_events')
+        self.publish_legacy = getattr(settings, 'KAFKA_PUBLISH_WEBHOOKS_TOPIC', False)
         
         # Initialize Kafka Producer
         bootstrap_servers = getattr(settings, 'KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
@@ -70,30 +72,29 @@ class FacebookWebhookService:
             return True, challenge
         return False, None
 
-    def verify_signature(self, payload_body, signature_header):
-        """Verifies the payload signature using the App Secret."""
+    def verify_signature(self, payload_body: bytes, signature_header: str | None) -> bool:
+        """Verifies the payload signature using the App Secret (X-Hub-Signature-256).
+
+        Facebook format: sha256=<hex_digest>
+        """
         if not self.app_secret:
-            # If no app secret is configured, assume valid (or fail depending on strictness)
             logger.warning("FACEBOOK_APP_SECRET is not set. Skipping signature verification.")
             return True
-            
+
         if not signature_header:
             return False
 
-        # Facebook sends the signature as sha256=...
-        parts = signature_header.split('=')
-        if len(parts) != 2:
-            return False
+        # Use partition to safely split on the FIRST '=' only.
+        # split('=') would break if the digest itself ever contained '='.
+        hash_algorithm, sep, signature = signature_header.partition('=')
 
-        hash_algorithm, signature = parts
-        
-        if hash_algorithm != 'sha256':
+        if sep != '=' or hash_algorithm != 'sha256' or not signature:
             return False
 
         expected_signature = hmac.new(
             self.app_secret.encode('utf-8'),
             payload_body,
-            hashlib.sha256
+            hashlib.sha256,
         ).hexdigest()
 
         return hmac.compare_digest(expected_signature, signature)
@@ -101,12 +102,27 @@ class FacebookWebhookService:
     def publish_event(self, payload):
         """Publishes the standardized payload to Kafka."""
         event_data = json.dumps(payload) if isinstance(payload, dict) else payload
+
+        key = None
+        if isinstance(payload, dict):
+            try:
+                entries = payload.get("entry") or []
+                if entries and isinstance(entries, list) and isinstance(entries[0], dict):
+                    key = str(entries[0].get("id") or "") or None
+            except Exception:
+                key = None
         
         try:
-            self.producer.produce(
-                self.kafka_topic,
-                value=event_data.encode('utf-8')
-            )
+            topics = [self.raw_events_topic]
+            if self.publish_legacy and self.kafka_topic not in topics:
+                topics.append(self.kafka_topic)
+
+            for topic in topics:
+                self.producer.produce(
+                    topic,
+                    value=event_data.encode('utf-8'),
+                    key=key.encode('utf-8') if key else None,
+                )
             self.producer.poll(0) # Trigger delivery reports
             return True
         except Exception as e:
