@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  web-hook:
+    build:
+      context: .
+      dockerfile: ./ucode-webhook/.dockerfile
+    ports:
+      - "5001:5001"
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,0.0.0.0
+    depends_on:
+      - kafka
+    command:
+      [
+        "sh",
+        "-c",
+        "python manage.py migrate && gunicorn core.wsgi:application --bind 0.0.0.0:5001 --workers 3 --threads 2 --timeout 60",
+      ]
+    container_name: web-hook
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    container_name: zookeeper
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    container_name: kafka
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    container_name: kafka-ui
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    container_name: postgres-db-facebook-api
