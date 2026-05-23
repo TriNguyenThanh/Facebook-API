@@ -1,0 +1,191 @@
+x-service-env: &service-env
+  DJANGO_DEBUG: "0"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_RAW_EVENTS_TOPIC: "raw_events"
+  KAFKA_REPLY_COMMANDS_TOPIC: "reply_commands"
+  KAFKA_SEND_FAILED_TOPIC: "send_failed"
+  KAFKA_SEND_RETRY_TOPIC: "send_retry"
+  KAFKA_DEAD_LETTER_TOPIC: "dead_letter"
+
+x-backend-db-env: &backend-db-env
+  DJANGO_DB_ENGINE: "django.db.backends.postgresql"
+  DJANGO_DB_NAME: "fb_api_db"
+  DJANGO_DB_USER: "fb_api_user"
+  DJANGO_DB_PASSWORD: "fb_api_password"
+  DJANGO_DB_HOST: "postgres"
+  DJANGO_DB_PORT: "5432"
+
+services:
+  webhook-service:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/ucode_webhook
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,0.0.0.0"
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+    command: ["gunicorn", "core.wsgi:application", "--bind", "0.0.0.0:3001", "--workers", "3", "--threads", "2", "--timeout", "60"]
+    container_name: webhook-service
+
+  core-service:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/core_service
+    ports:
+      - "3002:3002"
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+    command: ["gunicorn", "core_service.wsgi:application", "--bind", "0.0.0.0:3002", "--workers", "2", "--threads", "2", "--timeout", "60"]
+    container_name: core-service
+
+  core-worker:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/core_service
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      KAFKA_CONSUMER_GROUP: "core_service"
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "consume_raw_events"]
+    container_name: core-worker
+
+  backend-api:
+    build:
+      context: .
+      dockerfile: ./ucode_page_api/.dockerfile
+    working_dir: /app/ucode_page_api
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      <<: [*service-env, *backend-db-env]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "python manage.py migrate --fake-initial && gunicorn core.wsgi:application --bind 0.0.0.0:3000 --workers 3 --threads 2 --timeout 60"]
+    container_name: backend-api
+
+  backend-worker:
+    build:
+      context: .
+      dockerfile: ./ucode_page_api/.dockerfile
+    working_dir: /app/ucode_page_api
+    env_file:
+      - .env
+    environment:
+      <<: [*service-env, *backend-db-env]
+      KAFKA_CONSUMER_GROUP: "backend_api"
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "python manage.py migrate --fake-initial && python manage.py consume_reply_commands"]
+    container_name: backend-worker
+
+  retry-service:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/retry_service
+    ports:
+      - "3003:3003"
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      MAX_RETRIES: "5"
+    command: ["gunicorn", "retry_service.wsgi:application", "--bind", "0.0.0.0:3003", "--workers", "2", "--threads", "2", "--timeout", "60"]
+    container_name: retry-service
+
+  retry-worker:
+    build:
+      context: .
+      dockerfile: ./ucode_webhook/.dockerfile
+    working_dir: /app/retry_service
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      KAFKA_CONSUMER_GROUP: "retry_service"
+      MAX_RETRIES: "5"
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+    command: ["python", "manage.py", "consume_send_failed"]
+    container_name: retry-worker
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    container_name: zookeeper
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    container_name: kafka
+
+  kafka-setup:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - kafka
+    command: "bash -c 'echo Waiting for Kafka to be ready... && \
+                       cub kafka-ready -b kafka:9092 1 60 && \
+                       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic raw_events && \
+                       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic reply_commands && \
+                       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic send_failed && \
+                       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic send_retry && \
+                       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic dead_letter'"
+    container_name: kafka-setup
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    depends_on:
+      - kafka
+    container_name: kafka-ui
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: fb_api_db
+      POSTGRES_USER: fb_api_user
+      POSTGRES_PASSWORD: fb_api_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fb_api_user -d fb_api_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "5432:5432"
+    container_name: fb_api-postgres

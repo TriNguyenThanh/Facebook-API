@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  django:
+    name: ${{ matrix.service.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: core-service
+            directory: core_service
+            requirements: core_service/requirements.txt
+          - name: backend-api
+            directory: ucode_page_api
+            requirements: ucode_page_api/requirements.txt
+          - name: webhook-service
+            directory: ucode_webhook
+            requirements: requirements.txt
+          - name: retry-service
+            directory: retry_service
+            requirements: requirements.txt
+
+    env:
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: ci-only-secret-key
+      DJANGO_DB_ENGINE: django.db.backends.sqlite3
+      DJANGO_DB_NAME: ":memory:"
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      FACEBOOK_ACTIONS_ENABLED: "0"
+      FACEBOOK_APP_SECRET: ci-app-secret
+      FACEBOOK_VERIFY_TOKEN: ci-verify-token
+      FACEBOOK_PAGE_ACCESS_TOKEN: ci-page-access-token
+      PAGE_ID: ci-page-id
+      ADMIN_API_KEY: ci-admin-api-key
+      DIFY_API_KEY: ""
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            core_service/requirements.txt
+            ucode_page_api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "${{ matrix.service.requirements }}"
+
+      - name: Run Django system checks
+        working-directory: ${{ matrix.service.directory }}
+        run: python manage.py check
+
+      - name: Run tests
+        working-directory: ${{ matrix.service.directory }}
+        run: python manage.py test

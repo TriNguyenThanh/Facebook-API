@@ -219,4 +219,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-/.github/
+.github/instructions/
+.github/skills/
+.codegraph/
+**/AGENTS.md
+docs/skills-rules/
+docs/PLAN.md
+docs/skills-and-rules.md
+docs/topics.md
+docs/systemdesign.puml

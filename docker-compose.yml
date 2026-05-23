@@ -1,104 +1,259 @@
 version: "3.9"
 
+x-service-env: &service-env
+  DJANGO_DEBUG: "1"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_RAW_EVENTS_TOPIC: "raw_events"
+  KAFKA_REPLY_COMMANDS_TOPIC: "reply_commands"
+  KAFKA_SEND_FAILED_TOPIC: "send_failed"
+  KAFKA_SEND_RETRY_TOPIC: "send_retry"
+  KAFKA_DEAD_LETTER_TOPIC: "dead_letter"
+
+x-backend-db-env: &backend-db-env
+  DJANGO_DB_ENGINE: "django.db.backends.postgresql"
+  DJANGO_DB_NAME: "fb_api_db"
+  DJANGO_DB_USER: "fb_api_user"
+  DJANGO_DB_PASSWORD: "fb_api_password"
+  DJANGO_DB_HOST: "postgres"
+  DJANGO_DB_PORT: "5432"
+
+x-ucode-webhook-build: &ucode-webhook-build
+  context: .
+  dockerfile: ./ucode_webhook/.dockerfile
+
+x-ucode-page-api-build: &ucode-page-api-build
+  context: .
+  dockerfile: ./ucode_page_api/.dockerfile
+
 services:
-  web-hook:
-    build:
-      context: .
-      dockerfile: ./ucode_webhook/.dockerfile
+  webhook-service:
+    build: *ucode-webhook-build
     working_dir: /app/ucode_webhook
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,0.0.0.0"
+    volumes:
+      - .:/app
     ports:
-      - "5001:5001"
-    env_file:
-      - ./ucode_webhook/.env
-      - .env
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_RAW_EVENTS_TOPIC: raw_events
-      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,0.0.0.0
+      - "3001:3001"
     depends_on:
-      - kafka
-    command:
-      [
-        "sh",
-        "-c",
-        "python manage.py migrate && gunicorn core.wsgi:application --bind 0.0.0.0:5001 --workers 3 --threads 2 --timeout 60",
-      ]
-    container_name: web-hook
+      kafka-setup:
+        condition: service_completed_successfully
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:3001"
 
-  core-service-worker:
-    build:
-      context: .
-      dockerfile: ./ucode_webhook/.dockerfile
+  core-service:
+    build: *ucode-webhook-build
     working_dir: /app/core_service
     env_file:
-      - ./core_service/.env
       - .env
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      <<: *service-env
+    volumes:
+      - .:/app
+    ports:
+      - "3002:3002"
     depends_on:
-      - kafka
-    command:
-      [
-        "sh",
-        "-c",
-        "python manage.py migrate && python manage.py consume_raw_events",
-      ]
-    container_name: core-service-worker
+      kafka-setup:
+        condition: service_completed_successfully
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:3002"
 
-  core-service-retry:
-    build:
-      context: .
-      dockerfile: ./ucode_webhook/.dockerfile
+  core-worker:
+    build: *ucode-webhook-build
     working_dir: /app/core_service
     env_file:
-      - ./core_service/.env
       - .env
     environment:
-      DJANGO_DEBUG: "1"
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_SEND_FAILED_TOPIC: send_failed
-      FACEBOOK_ACTIONS_ENABLED: "0"
+      <<: *service-env
+      KAFKA_CONSUMER_GROUP: "core_service"
+    volumes:
+      - .:/app
     depends_on:
-      - kafka
-    command: ["sh", "-c", "python manage.py retry_failed_actions --sleep 2"]
-    container_name: core-service-retry
+      kafka-setup:
+        condition: service_completed_successfully
+    command: >
+      sh -c "python manage.py consume_raw_events"
+
+  backend-migrate:
+    build: *ucode-page-api-build
+    working_dir: /app/ucode_page_api
+    env_file:
+      - .env
+    environment:
+      <<: [*service-env, *backend-db-env]
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate --fake-initial"
+    restart: "no"
+
+  backend-api:
+    build: *ucode-page-api-build
+    working_dir: /app/ucode_page_api
+    env_file:
+      - .env
+    environment:
+      <<: [*service-env, *backend-db-env]
+    volumes:
+      - .:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:3000"
+
+  backend-worker:
+    build: *ucode-page-api-build
+    working_dir: /app/ucode_page_api
+    env_file:
+      - .env
+    environment:
+      <<: [*service-env, *backend-db-env]
+      KAFKA_CONSUMER_GROUP: "backend_api"
+    volumes:
+      - .:/app
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+      kafka-setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py consume_reply_commands"
+
+  retry-service:
+    build: *ucode-webhook-build
+    working_dir: /app/retry_service
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      MAX_RETRIES: "5"
+    volumes:
+      - .:/app
+    ports:
+      - "3003:3003"
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+    command: >
+      sh -c "python manage.py runserver 0.0.0.0:3003"
+
+  retry-worker:
+    build: *ucode-webhook-build
+    working_dir: /app/retry_service
+    env_file:
+      - .env
+    environment:
+      <<: *service-env
+      KAFKA_CONSUMER_GROUP: "retry_service"
+      MAX_RETRIES: "5"
+    volumes:
+      - .:/app
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+    command: >
+      sh -c "python manage.py consume_send_failed"
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    container_name: zookeeper
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+    healthcheck:
+      test: ["CMD-SHELL", "cub zk-ready localhost:2181 10"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    container_name: kafka
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "cub kafka-ready -b localhost:9092 1 10"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+
+  kafka-setup:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka DNS...' &&
+        until getent hosts kafka; do sleep 2; done &&
+
+        echo 'Waiting for Kafka broker...' &&
+        cub kafka-ready -b kafka:9092 1 60 &&
+
+        echo 'Creating Kafka topics...' &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic raw_events &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic reply_commands &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic send_failed &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic send_retry &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic dead_letter &&
+
+        echo 'Kafka topics are ready.'
+      "
+    restart: "no"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_NAME: "local"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:2181"
     depends_on:
-      - kafka
-    container_name: kafka-ui
+      kafka:
+        condition: service_healthy
 
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: "fb_api_db"
+      POSTGRES_USER: "fb_api_user"
+      POSTGRES_PASSWORD: "fb_api_password"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    container_name: postgres-db-facebook-api
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fb_api_user -d fb_api_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:
