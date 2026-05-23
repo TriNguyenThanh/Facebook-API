@@ -3,6 +3,7 @@ from django.urls import path, include, re_path
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from api.views import health
 
 # Cấu hình thông tin chung cho Swagger
 schema_view = get_schema_view(
@@ -18,6 +19,7 @@ schema_view = get_schema_view(
    permission_classes=(permissions.AllowAny,), # Cho phép mọi người xem tài liệu
 )
 urlpatterns = [
+    path('health/', health),
     path('api/', include('api.urls')), # Mọi API sẽ bắt đầu bằng /api/
     
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
