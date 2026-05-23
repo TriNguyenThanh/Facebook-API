@@ -18,9 +18,6 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from .env at project root (same level as manage.py)
-load_dotenv(BASE_DIR / ".env")
-# Also load from workspace root
 load_dotenv(BASE_DIR.parent / ".env")
 
 
@@ -88,8 +85,12 @@ WSGI_APPLICATION = 'core_service.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': os.getenv("DJANGO_DB_ENGINE", "django.db.backends.sqlite3"),
+        'NAME': os.getenv("DJANGO_DB_NAME", str(BASE_DIR / 'db.sqlite3')),
+        'USER': os.getenv("DJANGO_DB_USER", ""),
+        'PASSWORD': os.getenv("DJANGO_DB_PASSWORD", ""),
+        'HOST': os.getenv("DJANGO_DB_HOST", ""),
+        'PORT': os.getenv("DJANGO_DB_PORT", ""),
     }
 }
 
@@ -140,6 +141,7 @@ REST_FRAMEWORK = {
 # Kafka
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_RAW_EVENTS_TOPIC = os.getenv("KAFKA_RAW_EVENTS_TOPIC", "raw_events")
+KAFKA_REPLY_COMMANDS_TOPIC = os.getenv("KAFKA_REPLY_COMMANDS_TOPIC", "reply_commands")
 KAFKA_SEND_FAILED_TOPIC = os.getenv("KAFKA_SEND_FAILED_TOPIC", "send_failed")
 KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "core_service")
 KAFKA_AUTO_OFFSET_RESET = os.getenv("KAFKA_AUTO_OFFSET_RESET", "earliest")
