@@ -8,9 +8,6 @@ from dotenv import load_dotenv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from .env at project root (same level as manage.py)
-load_dotenv(BASE_DIR / ".env")
-# Also load from workspace root
 load_dotenv(BASE_DIR.parent / ".env")
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -120,25 +117,16 @@ REST_FRAMEWORK = {
 
 # Optional: Kafka-related env values (use in your producer code)
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_WEBHOOK_TOPIC = os.getenv("KAFKA_WEBHOOK_TOPIC", "webhooks")
 KAFKA_RAW_EVENTS_TOPIC = os.getenv("KAFKA_RAW_EVENTS_TOPIC", "raw_events")
 
 # Publish raw_events by default; optionally also publish to legacy KAFKA_WEBHOOK_TOPIC.
 KAFKA_PUBLISH_WEBHOOKS_TOPIC = os.getenv("KAFKA_PUBLISH_WEBHOOKS_TOPIC", "0") == "1"
 
-# Facebook webhook verification token (used by your verify view)
-FACEBOOK_VERIFY_TOKEN = os.getenv("FACEBOOK_VERIFY_TOKEN", "")
-
-# Facebook App Secret (used for verifying payload signatures)
-FACEBOOK_APP_SECRET = os.getenv("FACEBOOK_APP_SECRET", "")
-
-# Facebook App ID (used for general API queries if needed)
-FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID", "")
-
 # Facebook Graph API Version
-FACEBOOK_GRAPH_API_VERSION = os.getenv("FACEBOOK_GRAPH_API_VERSION", "v19.0")
-
-# Facebook Page Access Token
+FACEBOOK_GRAPH_API_VERSION = os.getenv("FACEBOOK_GRAPH_API_VERSION", "v25.0")
+FACEBOOK_VERIFY_TOKEN = os.getenv("FACEBOOK_VERIFY_TOKEN", "")
+FACEBOOK_APP_SECRET = os.getenv("FACEBOOK_APP_SECRET", "")
 FACEBOOK_PAGE_ACCESS_TOKEN = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "")
+FACEBOOK_WEBHOOK_SUBSCRIBED_FIELDS = os.getenv("FACEBOOK_WEBHOOK_SUBSCRIBED_FIELDS", "feed,messages")
 
-PAGE_ID = os.getenv("PAGE_ID", "")
+PAGE_ID = os.getenv("PAGE_ID", "")  

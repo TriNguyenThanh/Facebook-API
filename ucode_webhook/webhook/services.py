@@ -2,7 +2,6 @@ import hmac
 import hashlib
 import json
 import logging
-import requests
 from django.conf import settings
 from confluent_kafka import Producer
 from typing import Any, cast
@@ -27,11 +26,12 @@ class FacebookSubscriptionService:
         if not self.access_token:
             raise FacebookSubscriptionError("Missing FACEBOOK_PAGE_ACCESS_TOKEN in environment")
 
+        subscribed_fields = getattr(settings, "FACEBOOK_WEBHOOK_SUBSCRIBED_FIELDS", "feed,messages")
         params = {
             "access_token": self.access_token,
         }
         data = {
-            "subscribed_fields": "feed",
+            "subscribed_fields": subscribed_fields,
         }
 
         query = urlencode(params)
@@ -60,11 +60,14 @@ class FacebookWebhookService:
         self.raw_events_topic = getattr(settings, 'KAFKA_RAW_EVENTS_TOPIC', 'raw_events')
         self.publish_legacy = getattr(settings, 'KAFKA_PUBLISH_WEBHOOKS_TOPIC', False)
         
-        # Initialize Kafka Producer
-        bootstrap_servers = getattr(settings, 'KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-        self.producer = Producer({
-            'bootstrap.servers': bootstrap_servers
-        })
+        self.bootstrap_servers = getattr(settings, 'KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+        self.producer: Producer | None = None
+        self._delivery_errors: list[str] = []
+
+    def _producer(self) -> Producer:
+        if self.producer is None:
+            self.producer = Producer({'bootstrap.servers': self.bootstrap_servers})
+        return self.producer
 
     def verify_webhook(self, mode, token, challenge):
         """Verifies the webhook subscription with Facebook."""
@@ -105,30 +108,56 @@ class FacebookWebhookService:
 
         key = None
         if isinstance(payload, dict):
-            try:
-                entries = payload.get("entry") or []
-                if entries and isinstance(entries, list) and isinstance(entries[0], dict):
-                    key = str(entries[0].get("id") or "") or None
-            except Exception:
-                key = None
+            key = str(payload.get("event_id") or payload.get("page_id") or "") or None
         
         try:
             topics = [self.raw_events_topic]
             if self.publish_legacy and self.kafka_topic not in topics:
                 topics.append(self.kafka_topic)
 
+            self._delivery_errors = []
+            producer = self._producer()
             for topic in topics:
-                self.producer.produce(
+                producer.produce(
                     topic,
                     value=event_data.encode('utf-8'),
                     key=key.encode('utf-8') if key else None,
+                    callback=self._delivery_report,
                 )
-            self.producer.poll(0) # Trigger delivery reports
+            producer.poll(0) # Trigger delivery reports
+            logger.info(
+                "webhook_event_published",
+                extra={
+                    "service": "webhook-service",
+                    "event_id": key,
+                    "topic": self.raw_events_topic,
+                },
+            )
             return True
         except Exception as e:
             logger.error(f"Error publishing to Kafka: {e}")
             return False
 
-    def flush(self):
+    def _delivery_report(self, err, msg):
+        if err is not None:
+            error = str(err)
+            self._delivery_errors.append(error)
+            logger.error("kafka_delivery_failed", extra={"service": "webhook-service", "error": error})
+            return
+
+        logger.info(
+            "kafka_delivery_succeeded",
+            extra={
+                "service": "webhook-service",
+                "topic": msg.topic(),
+                "partition": msg.partition(),
+                "offset": msg.offset(),
+            },
+        )
+
+    def flush(self) -> bool:
         """Wait for any outstanding messages to be delivered and delivery report callbacks to be triggered."""
-        self.producer.flush()
+        if self.producer is None:
+            return True
+        remaining = self.producer.flush(10)
+        return remaining == 0 and not self._delivery_errors

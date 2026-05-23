@@ -1,4 +1,6 @@
 from django.http import HttpResponse
+from django.http import JsonResponse
+import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -8,7 +10,39 @@ from drf_yasg import openapi
 from core.settings import PAGE_ID
 
 from .services import FacebookWebhookService, FacebookSubscriptionService, FacebookSubscriptionError
+from .normalizers import normalize_facebook_webhook_events
 from .serializers import FacebookWebhookPayloadSerializer
+
+
+logger = logging.getLogger(__name__)
+
+
+def _summarize_webhook_payload(payload):
+    fields = []
+    items = []
+    for entry in payload.get("entry", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes", []) or []:
+            if not isinstance(change, dict):
+                continue
+            field = change.get("field")
+            if field:
+                fields.append(str(field))
+            value = change.get("value") or {}
+            if isinstance(value, dict) and value.get("item"):
+                items.append(str(value.get("item")))
+        if entry.get("messaging"):
+            fields.append("messaging")
+    return {
+        "object": payload.get("object"),
+        "fields": sorted(set(fields)),
+        "items": sorted(set(items)),
+    }
+
+
+def health(_request):
+    return JsonResponse({"status": "ok", "service": "webhook-service"})
 
 class FacebookWebhookView(APIView):
     
@@ -60,12 +94,43 @@ class FacebookWebhookView(APIView):
             )
 
         payload = serializer.validated_data
+        events = normalize_facebook_webhook_events(payload)
         
-        # Publish to Kafka raw_events topic
-        self.service.publish_event(payload)
-        self.service.flush()
+        published = 0
+        failed = 0
+        for event in events:
+            if self.service.publish_event(event):
+                published += 1
+            else:
+                failed += 1
+        delivered = self.service.flush()
 
-        return Response({"status": "EVENT_RECEIVED"}, status=status.HTTP_200_OK)
+        if not events:
+            logger.warning(
+                "webhook_no_supported_events",
+                extra={"service": "webhook-service", **_summarize_webhook_payload(payload)},
+            )
+        if failed or not delivered:
+            logger.error(
+                "webhook_kafka_publish_incomplete",
+                extra={
+                    "service": "webhook-service",
+                    "published": published,
+                    "failed": failed,
+                    "delivered": delivered,
+                },
+            )
+
+        return Response(
+            {
+                "status": "EVENT_RECEIVED",
+                "events": len(events),
+                "published": published,
+                "delivered": delivered,
+                "failed": failed,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class SubscribePageWebhookView(APIView):
