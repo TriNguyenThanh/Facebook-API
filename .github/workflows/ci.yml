@@ -119,6 +119,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Prepare compose env file
+        run: cp .env.example .env
+
       - name: Validate compose files
         run: |
           docker compose -f docker-compose.yml config --quiet
