@@ -27,6 +27,22 @@ def next_retry_message(message: dict[str, Any], max_retries: int) -> tuple[str, 
     return "send_retry", retry, float(2**retry_count)
 
 
+def retry_decision_log(command_id: str, retry_count: int, destination: str) -> str:
+    return json.dumps(
+        {
+            "timestamp": timezone.now().isoformat(),
+            "service": "retry-service",
+            "level": "info",
+            "message": "retry decision",
+            "command_id": command_id,
+            "retry_count": retry_count,
+            "destination": destination,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 class Command(BaseCommand):
     help = "Consume send_failed and republish to send_retry or dead_letter."
 
@@ -84,7 +100,6 @@ class Command(BaseCommand):
 
         if idempotency_key in self.processed_retries:
             return
-        self.processed_retries.add(idempotency_key)
 
         if delay > 0:
             time.sleep(delay)
@@ -96,4 +111,5 @@ class Command(BaseCommand):
         )
         producer.produce(topic, value=_json_bytes(outgoing), key=command_id.encode("utf-8"))
         producer.poll(0)
-        self.stdout.write(f"command_id={command_id} retry_count={retry_count} destination={topic}")
+        self.processed_retries.add(idempotency_key)
+        self.stdout.write(retry_decision_log(command_id, retry_count, topic))
