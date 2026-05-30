@@ -51,6 +51,7 @@ services:
       - .env
     environment:
       <<: *service-env
+      
     volumes:
       - .:/app
     ports:
@@ -120,6 +121,7 @@ services:
     environment:
       <<: [*service-env, *backend-db-env]
       KAFKA_CONSUMER_GROUP: "backend_api"
+      HTTPS_PROXY: "http://127.0.0.1:9"
     volumes:
       - .:/app
     depends_on:
