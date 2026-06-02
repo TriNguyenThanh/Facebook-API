@@ -48,6 +48,27 @@ All internal service communication goes through Kafka. Services do not call each
 | `send_retry`     | retry-worker    | backend-worker |
 | `dead_letter`    | retry-worker    | ops/monitoring |
 
+## Dead Letter Queue Monitoring
+
+`dead_letter` is a Kafka topic, not an application service. The retry worker publishes terminal failures there after `MAX_RETRIES` is exhausted, and no service consumes from it.
+
+Docker Compose includes the operational tooling for this flow:
+
+| Tool         | URL                   | Purpose                                      |
+| ------------ | --------------------- | -------------------------------------------- |
+| Kafka UI     | http://localhost:8080 | Inspect `dead_letter` messages manually      |
+| Prometheus   | http://localhost:9090 | Scrape Kafka offsets and evaluate DLQ alerts |
+| Alertmanager | http://localhost:9093 | Route critical alerts immediately            |
+| Gmail SMTP   | —                     | Sends DLQ alert emails                       |
+
+Prometheus fires `DeadLetterQueueReceived` when the `dead_letter` topic offset increases within 1 minute:
+
+```promql
+increase(kafka_topic_partition_current_offset{topic="dead_letter"}[1m]) > 0
+```
+
+Alertmanager routes `severity="critical"` alerts with `group_wait: 0s`, so a new DLQ message sends an immediate email through Gmail SMTP. Configure `ALERTMANAGER_SMTP_FROM`, `ALERTMANAGER_SMTP_USERNAME`, `ALERTMANAGER_SMTP_PASSWORD`, and `ALERTMANAGER_EMAIL_TO` in `.env`. For Gmail, use a Google App Password, not the normal account password.
+
 ## Requirements
 
 - Docker and Docker Compose

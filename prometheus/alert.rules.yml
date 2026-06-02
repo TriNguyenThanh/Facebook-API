@@ -1,0 +1,11 @@
+groups:
+  - name: kafka-dead-letter
+    rules:
+      - alert: DeadLetterQueueReceived
+        expr: increase(kafka_topic_partition_current_offset{topic="dead_letter"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "New message in Dead Letter Queue"
+          description: "The dead_letter topic received a new message in the last minute. Inspect Kafka UI at http://localhost:8080 and handle it manually."

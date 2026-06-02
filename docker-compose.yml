@@ -239,6 +239,68 @@ services:
       kafka:
         condition: service_healthy
 
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.7.0
+    command:
+      - "--kafka.server=kafka:9092"
+      - "--topic.filter=dead_letter|raw_events|reply_commands|send_failed|send_retry"
+    ports:
+      - "9308:9308"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - kafka-exporter
+      - alertmanager
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    env_file:
+      - .env
+    environment:
+      ALERTMANAGER_SMTP_SMARTHOST: "${ALERTMANAGER_SMTP_SMARTHOST:-smtp.gmail.com:587}"
+      ALERTMANAGER_SMTP_FROM: "${ALERTMANAGER_SMTP_FROM:?Set ALERTMANAGER_SMTP_FROM to your Gmail sender address}"
+      ALERTMANAGER_SMTP_USERNAME: "${ALERTMANAGER_SMTP_USERNAME:?Set ALERTMANAGER_SMTP_USERNAME to your Gmail sender address}"
+      ALERTMANAGER_SMTP_PASSWORD: "${ALERTMANAGER_SMTP_PASSWORD:?Set ALERTMANAGER_SMTP_PASSWORD to your Google app password}"
+      ALERTMANAGER_EMAIL_TO: "${ALERTMANAGER_EMAIL_TO:?Set ALERTMANAGER_EMAIL_TO in .env}"
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        awk '{
+          gsub(/__SMTP_SMARTHOST__/, ENVIRON["ALERTMANAGER_SMTP_SMARTHOST"]);
+          gsub(/__SMTP_FROM__/, ENVIRON["ALERTMANAGER_SMTP_FROM"]);
+          gsub(/__SMTP_USERNAME__/, ENVIRON["ALERTMANAGER_SMTP_USERNAME"]);
+          gsub(/__SMTP_PASSWORD__/, ENVIRON["ALERTMANAGER_SMTP_PASSWORD"]);
+          gsub(/__EMAIL_TO__/, ENVIRON["ALERTMANAGER_EMAIL_TO"]);
+          print
+        }' /etc/alertmanager/alertmanager.yml.template > /tmp/alertmanager.yml &&
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml.template:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+
+
+
   postgres:
     image: postgres:15
     environment:
@@ -256,4 +318,6 @@ services:
       retries: 12
 
 volumes:
+  alertmanager_data:
+  prometheus_data:
   postgres_data:
